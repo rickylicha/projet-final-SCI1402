@@ -23,7 +23,7 @@ J'ai aussi modélisé les données visuellement à l'aide de graphiques et d'une
 
 ## Contenu du dépôt
 
-- `analyse.R` : le code R pur sans explications avec seulement quelques commentaires.
+- `code.R` : le code R pur sans explications avec seulement quelques commentaires.
 - `rapport_final_patinage.Rmd` : fichier R Markdown contenant le rapport complet, le code, les analyses et les interprétations.
 - `index.html` : version HTML du rapport final générée à partir du fichier R Markdown.
 - `data/` : dossier contenant les fichiers CSV utilisés pour réaliser les analyses.
