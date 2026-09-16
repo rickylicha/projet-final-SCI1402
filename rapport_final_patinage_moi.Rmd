@@ -1,0 +1,486 @@
+---
+title: "Analyse du biais national dans le jugement en patinage artistique"
+author: "Richard Florian"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+
+# Introduction
+
+Bienvenue dans mon rapport de projet final pour le cours SCI 1402 - Projet en science des données.
+
+J'ai choisi de faire une analyse sur les scores en patinage artistique. C'est un sport dans lequel le résultat dépend d'un panel de juges. Le pointage comprend des éléments techniques ainsi que des composantes de programme. Les éléments ont une valeur de base, à laquelle s'ajoute une valeur donnée par les juges pour l'exécution. Les composantes évaluent l'aspect artistique et comportent aussi une part de subjectivité.
+
+Cette subjectivité rend l'analyse statistique du pointage particulièrement intéressante. La question principale de ce projet est :
+
+**Est-ce que les juges de patinage artistique évaluent plus favorablement les patineurs de leur propre pays ?**
+
+L'hypothèse est qu'un biais national peut être observé et que les juges accordent en moyenne des scores plus élevés aux patineurs représentant leur propre pays.
+
+J'ai choisi cette question, car elle revient dans les discussions en ligne et dans le monde du sport à chaque compétition. Plusieurs personnes accusent certains juges de favoritisme quand leur patineur préféré ne gagne pas une compétition. Je désire vérifier si cette perception de favoritisme peut être observée dans les données.
+
+De plus, le projet explore la distribution des scores, les différences entre les programmes, la représentation géographique des participants et la variation de l'écart de notation selon la nationalité du juge et le programme.
+
+Dans ce rapport, le mot patineur est utilisé pour désigner un patineur, une patineuse, ou un couple de patineurs, afin d'alléger la lecture.
+
+# Données
+
+Les données utilisées proviennent du dépôt GitHub *figure-skating-scores* de BuzzFeed News, disponibles sur ce [lien](https://github.com/BuzzFeedNews/figure-skating-scores). Elles ont été extraites à partir des protocoles publiés par l'International Skating Union (ISU). L'ensemble comprend 17 compétitions internationales de 2016 et 2017.
+
+Les données sont séparées en quatre fichiers CSV : `performances`, `judged_aspects`, `judge_scores` et `programs`. Une explication plus détaillée sur ces bases de données et sur les variables est disponible sur le GitHub.
+
+Ces données ne contiennent cependant pas la nationalité des juges. Cette information est indispensable pour répondre à la question principale. Un fichier supplémentaire, `judges_info.csv`, a donc été construit manuellement. Comme cette collecte est longue, les informations ont été ajoutées pour trois compétitions seulement :
+
+- ISU World Figure Skating Championships 2017;
+- ISU GP Trophee de France 2016;
+- ISU Four Continents Championships 2017.
+
+Les informations pour construire ce fichier ont été trouvées sur le site [Figure Skating Wikia](https://figure-skating.fandom.com). 
+
+Les analyses portant directement sur le biais des juges sont donc limitées à ces trois compétitions. Les analyses qui ne nécessitent pas la nationalité des juges, notamment la carte du monde, peuvent utiliser l'ensemble des compétitions disponibles.
+
+Un fichier `correspondance.csv`, fait à la main, est aussi utilisé pour faire correspondre les codes de pays sportifs (IOC) aux codes ISO nécessaires à la cartographie.
+
+# Importation et préparation des données
+
+Le code R utilisé pour produire les analyses est conservé dans le fichier R Markdown et dans le fichier R du dépôt GitHub. Le code est exécuté, mais ne s'affiche pas dans la page HTML créée, pour ne pas alourdir le rapport.
+
+```{r importation, message=FALSE, warning=FALSE}
+#installer bibliothèques nécessaires
+library(sf)
+library(tmap)
+library(spData)
+
+#importer les tables
+
+performances <- read.csv("data/performances.csv", sep=",")
+judged_aspects <- read.csv("data/judged-aspects.csv", sep=",")
+judge_scores <- read.csv("data/judge-scores.csv", sep=",")
+programs <- read.csv("data/programs.csv", sep=",")
+judges_info <- read.csv("data/judges_info.csv", sep = ";")
+correspondance <- read.csv("data/correspondance.csv", sep=",")
+```
+
+Toutes les tables (sauf correspondance) sont fusionnées à l'aide de leurs clés communes. La table contenant la nationalité des juges est ajoutée à la fin. Ainsi, df_full contient l'ensemble des données disponibles dans le GitHub de Buzzfeed, et df_full2 contient les données des compétitions pour lesquelless les informations des juges ont été ajoutées.
+
+```{r fusion}
+#fusionner les données dans une grosse table
+
+df_full <- merge(performances, judged_aspects,
+                 by = "performance_id")
+df_full <- merge(df_full, judge_scores,
+                 by = "aspect_id")
+df_full <- merge(df_full, programs,
+                 by = c("competition", "program"))
+df_full2 <- merge(df_full, judges_info,
+                  by = c("competition", "program", "judge"))
+```
+
+Dans les données détaillées, les scores sont enregistrés pour chaque élément et composante, pour chaque patineur et chaque juge.
+
+Il faut les additionner pour obtenir le score total pour chaque patineur pour chaque combinaison de compétition, programme, juge et performance.
+
+Ce total n'est pas exactement le score officiel du patineur. Dans le calcul officiel, certaines notes extrêmes du panel sont écartées. Pour étudier un possible biais individuel, il est plus utile d'utiliser le score additionné, y compris les valeurs élevées ou faibles.
+
+```{r aggregation}
+#additionner le score par juge, par patineur, par performance, par compétition
+
+df_summary <- aggregate(
+  score ~ competition + program + judge + judge_name +
+    judge_nation + performance_id + name + nation,
+  data = df_full2,
+  FUN = sum,
+  na.rm = TRUE
+)
+```
+
+Une variable binaire `same_country` est ensuite créée. Elle vaut `TRUE` lorsque le juge et le patineur représentent le même pays et `FALSE` dans le cas contraire.
+
+```{r same-country}
+#ajouter la colonne pour le même pays
+
+df_summary$same_country <-
+  df_summary$judge_nation == df_summary$nation
+```
+
+# Analyse exploratoire
+
+## Comparaison des moyennes
+
+```{r moyennes}
+#comparaison des moyennes
+
+mean(df_summary$score[df_summary$same_country == FALSE])
+mean(df_summary$score[df_summary$same_country == TRUE])
+
+aggregate(score ~ same_country,
+          data = df_summary,
+          FUN = mean)
+```
+
+Dans les données finales, le score moyen est d'environ **41,72** lorsque le juge et le patineur représentent des pays différents et d'environ **46,69** lorsqu'ils représentent le même pays. L'écart brut est donc d'environ **4,97 points en faveur du même pays**.
+
+Cette première comparaison va dans le sens de l'hypothèse, mais elle ne suffit pas à démontrer un biais. Certains pays peuvent notamment avoir de meilleurs patineurs. Des tests statistiques et un modèle tenant compte des nationalités sont donc nécessaires.
+
+Les moyennes peuvent également être examinées séparément pour chacun des programmes.
+
+```{r moyennes-programmes}
+#et par discipline
+
+aggregate(score ~ program + same_country,
+          data = df_summary,
+          FUN = mean)
+```
+
+# Visualisation des données
+
+## Scores selon le biais national
+
+```{r boxplot-biais, fig.width=7, fig.height=5}
+#faire des graphiques 
+
+boxplot(score ~ same_country,
+        data = df_summary,
+        main = "Scores selon le biais national",
+        xlab = "Même pays juge / patineur",
+        ylab = "Score total",
+        names = c("Différents pays", "Même pays"))
+```
+
+Ce boxplot a été choisi pour comparer la distribution des scores entre les deux groupes de la variable `same_country`. Sur l'axe horizontal, on voit si le patineur et le juge sont du même pays (TRUE) ou non (FALSE). L'axe vertical correspond au score total agrégé attribué par un juge à une performance.
+
+La ligne au centre de chaque boîte représente la médiane, tandis que la boîte contient la moitié centrale des observations. On observe que la boîte et la médiane du groupe « Même pays » se situent plus haut que celles du groupe « Différents pays ». Visuellement, on obtient un premier indice que les scores tendent à être plus élevés lorsque le juge et le patineur sont du même pays. Cette observation n'est tout de même qu'une piste, il faut faire des tests pour voir si la différence est statistiquement significative.
+
+## Distribution des scores par programme
+
+```{r boxplot-programmes, fig.width=8, fig.height=6}
+par(mar = c(12, 5, 4, 2))
+
+boxplot(
+  score ~ program,
+  data = df_summary,
+  main = "Distribution des scores par programme",
+  ylab = "Score total",
+  las = 2,
+  cex.axis = 0.8
+)
+```
+
+Ce boxplot permet de vérifier si les niveaux de scores sont comparables d'un programme à l'autre. L'axe horizontal présente les huit types de programmes. L'axe vertical représente le score total agrégé.
+
+Les positions des boîtes et des médianes ne sont pas identiques selon le programme. Certains programmes ont donc naturellement des scores plus élevés que d'autres. Cette visualisation est importante pour l'interprétation de l'analyse principale. En effet, une différence de score ne peut pas automatiquement être attribuée au biais national, puisque le type de programme influence également le niveau des scores. C'est aussi pour cette raison qu'une analyse distincte selon le programme est effectuée plus loin dans le rapport.
+
+## Distribution générale des scores
+
+```{r histogramme, fig.width=7, fig.height=5}
+hist(df_summary$score,
+     main = "Distribution de l'ensemble des scores",
+     xlab = "Score total",
+     ylab = "Nombre d'observations")
+```
+
+L'histogramme montre la distribution générale des scores agrégés dans `df_summary`. L'axe horizontal représente le score total, tandis que l'axe vertical indique le nombre d'observations dans chaque intervalle de scores.
+
+La majorité des observations se situe dans la partie centrale de la distribution, avec moins d'observations aux valeurs très faibles ou très élevées. Ce graphique permet donc de vérifier rapidement l'étendue des scores et leur forme générale avant d'effectuer les tests statistiques. Il permet aussi de constater qu'il n'y a pas seulement quelques valeurs isolées : les scores sont répartis sur un ensemble assez large de valeurs.
+
+# Tests de l'hypothèse principale
+
+## Pourquoi utiliser ces analyses?
+
+Deux analyses principales sont utilisées pour répondre à la question de recherche, car elles répondent à deux questions légèrement différentes.
+
+Le **test t de Welch** sert à comparer la moyenne d'une variable numérique entre deux groupes. Dans ce projet, on compare justement la moyenne des scores entre les deux groupes définis par same_country, selon si elle est TRUE ou FALSE. La version de Welch est utilisée parce qu'elle ne suppose pas que les deux groupes possèdent exactement la même variance et qu'elle convient aussi lorsque les tailles des groupes sont différentes.
+
+Le **modèle linéaire** est ensuite utilisé parce que le test t compare seulement les deux groupes sans contrôler d'autres variables. En réalité, le niveau des scores peut aussi varier selon la nationalité des patineurs ou celle des juges. Le modèle linéaire permet de tenir compte des autres variables.
+
+Les deux tests sont complémentaires. Le test t mesure la différence entre les moyennes des deux groupes, alors que le modèle linéaire permet de vérifier si une association avec `same_country` demeure lorsque d'autres facteurs sont considérés.
+
+## Test t de Welch
+
+Le **test t de Welch** compare les scores moyens des observations où `same_country` est `TRUE` et `FALSE`. L'hypothèse nulle est qu'il n'existe pas de différence entre les deux moyennes, et donc l'hypothèse alternative est qu'il existe une différence.
+
+```{r t-test}
+#tests
+
+t.test(score ~ same_country, data = df_summary)
+```
+
+Le test donne **t = -5,7557** et une **p-value d'environ 1,97 × 10^-8**. La p-value est beaucoup plus petite que 0,05 : l'hypothèse nulle est donc rejetée. On conclut que la différence entre les deux moyennes est statistiquement significative.
+
+L'écart brut est d'environ 4,97 points. Cependant, le test t ne contrôle pas les différences entre les pays. Une partie de cet écart pourrait provenir du niveau des patineurs ou de la composition de l'échantillon.
+
+## Modèle linéaire
+
+Le but du **modèle linéaire** est de représenter la relation entre une variable à expliquer et une ou plusieurs variables explicatives. Il peut être décrit par l'équation Y = β0 + β1X1 + ··· + βpXp + ε où β0 est l'ordonnée à l'origine, chaque X est une variable indépendante, ε est le résidu, chaque β est un coefficient, et Y est la variable à expliquer.
+
+Dans notre analyse, l'équation est **score = constante + effet de la nationalité du juge + effet de la nationalité du patineur + effet de same_country + erreur**
+
+Le `score` est donc la variable à expliquer. `judge_nation`, `nation` et `same_country` sont les variables utilisées pour expliquer une partie des différences de score. 
+
+L'intérêt principal du modèle pour cette recherche est le coefficient de `same_countryTRUE`. C'est la différence de moyennes selon si le juge et le patineur sont du même pays, après avoir tenu compte des différences liées à la nationalité du juge et à la nationalité du patineur.
+
+```{r modele-lineaire}
+m1 <- lm(score ~ judge_nation + nation + same_country,
+         data = df_summary)
+summary(m1)
+```
+
+Le coefficient associé à `same_countryTRUE` est d'environ **+3,06 points**, avec une **p-value d'environ 5,42 × 10^-7**. Cela signifie que, en prenant compte de toutes les autres variables présentes dans ce modèle, les observations où le juge et le patineur représentent le même pays sont associées à un score moyen d'environ 3,06 points plus élevé.
+
+Le modèle possède un **R² d'environ 0,489**. Cela signifie qu'environ 49 % de la variation observée est expliquée par la nationalité du juge, la nationalité du patineur et `same_country`.
+
+Le fait que l'écart estimé par le modèle (+3,06) soit plus faible que l'écart brut du test t (+4,97) suggère qu'une partie de la différence initialement observée est liée à la composition des nationalités dans les données. Malgré ça, l'association avec `same_country` demeure positive et statistiquement significative.
+
+# Écart selon la nationalité du juge
+
+Une analyse descriptive permet ensuite de vérifier si l'écart est semblable pour toutes les nationalités de juges. Pour chaque nationalité, le score moyen attribué aux patineurs du même pays est comparé au score moyen attribué aux autres pays.
+
+```{r ecart-nationalite, fig.width=9, fig.height=6}
+#différences selon le pays du juge
+
+moyennes <- aggregate(
+  score ~ judge_nation + same_country,
+  data = df_summary,
+  FUN = mean
+)
+
+meme_pays <- subset(moyennes, same_country == TRUE)
+autre_pays <- subset(moyennes, same_country == FALSE)
+
+resultat <- merge(
+  meme_pays,
+  autre_pays,
+  by = "judge_nation",
+  suffixes = c("_meme_pays", "_autre_pays")
+)
+
+resultat$difference <- resultat$score_meme_pays - resultat$score_autre_pays
+
+resultat <- resultat[order(-resultat$difference), ]
+
+resultat
+
+barplot(resultat$difference,
+        names.arg = resultat$judge_nation,
+        main = "Écart de notation selon la nationalité du juge",
+        xlab = "Nationalité du juge",
+        ylab = "Score moyen (même pays - pays différent)",
+        las = 2)
+```
+
+Dans ce graphique, chaque barre correspond à une nationalité de juge. L'axe vertical représente la différence entre le score moyen donné aux patineurs du même pays que le juge et le score moyen donné aux patineurs des autres pays. (same_countryTRUE - same_countryFALSE). Une valeur positive signifie donc que, pour cette nationalité, les compatriotes ont reçu en moyenne un score plus élevé. Une valeur négative signifie l'inverse.
+
+Le graphique montre une variation importante selon la nationalité du juge. Certaines nationalités ont un grand écart positif, alors que d'autres ont un écart négatif. La tendance générale n'est donc pas uniforme.
+
+Cette analyse est descriptive. Un grand écart ne signifie pas automatiquement qu'une nationalité est plus biaisée, puisque le nombre d'observations, les patineurs évalués et leur niveau peuvent varier d'un pays à l'autre. Le graphique sert surtout à montrer que l'effet moyen observé dans l'ensemble des données peut cacher des différences entre les groupes.
+
+# Représentation géographique des participants
+
+Cette section utilise `df_full`, donc l'ensemble des compétitions disponibles, puisque la nationalité des juges n'est pas nécessaire. Pour cet exercice, chaque participant est compté une seule fois, même s'il peut participer à plusieurs compétitions.
+
+Cette section n'est pas liée directement à la question principale de l'analyse à laquelle nous avons répondu avec les tests, c'est simplement pour avoir une meilleure vue globale.
+
+La carte est faite avec l'objet World qui est inclus dans la bibliothèque spData.
+
+```{r preparation-carte}
+#faire la carte du monde
+
+data(World)
+
+participants <- unique(df_full[c("name", "nation")])
+
+nb_participants <- aggregate(
+  name ~ nation,
+  data = participants,
+  FUN = length
+)
+
+names(nb_participants) <- c("nation", "nb_participants")
+
+nb_participants <- merge(
+  nb_participants,
+  correspondance,
+  by = "nation"
+)
+
+World <- merge(
+  World,
+  nb_participants,
+  by = "iso_a3",
+  all.x = TRUE
+)
+
+World$nb_participants[is.na(World$nb_participants)] <- 0
+```
+
+## Carte du monde
+
+```{r carte-monde, fig.width=10, fig.height=6, message=FALSE, warning=FALSE}
+tm_shape(World) +
+  tm_polygons(
+    "nb_participants",
+    fill.scale = tm_scale_intervals(
+      breaks = c(0, 1, 5, 10, 20, 30, 45, 59),
+      values = "brewer.blues",
+      as.count = TRUE
+    ),
+    fill.legend = tm_legend(
+      title = "Nombre de participants"
+    )
+  ) +
+  tm_title(
+    "Participants en patinage artistique 2016-2017",
+    position = c("center", "top"),
+    size = 1.2
+  ) +
+  tm_layout(
+    inner.margins = c(0.05, 0.05, 0.25, 0.05)
+  )
+```
+
+La carte représente le nombre de participants uniques pour chaque pays dans les 17 compétitions disponibles. Plus la couleur est foncée, plus le nombre de participants provenant du pays est élevé. 
+
+La représentation est très inégale. La Russie est particulièrement présente, tout comme les États-Unis, le Canada et le Japon. Les données datent d'avant que la Russie aille été bannie des compétitions de patinage artistique en 2022. Plusieurs autres pays apparaissent dans les données avec beaucoup moins de participants. Cette différence de représentation est importante à garder en tête, car les pays les plus présents génèrent davantage d'observations et davantage d'occasions pour un juge d'évaluer un patineur de son propre pays.
+
+## Tableau du nombre de participants par pays
+
+```{r tableau-participants}
+#faire le tableau qui va avec la carte
+
+noms_pays <- as.data.frame(World)[c("iso_a3", "name")]
+
+tableau_participants <- merge(
+  nb_participants,
+  noms_pays,
+  by = "iso_a3"
+)
+
+tableau_participants <- tableau_participants[
+  c("name", "nb_participants")
+]
+
+names(tableau_participants) <- c(
+  "Pays",
+  "Nombre de participants"
+)
+
+tableau_participants <- tableau_participants[
+  order(-tableau_participants$`Nombre de participants`),
+]
+
+rownames(tableau_participants) <- NULL
+
+tableau_participants
+```
+
+Le tableau montre que la Russie compte **58 participants uniques**, devant les États-Unis (**36**), le Canada et le Japon (**25 chacun**). La Chine compte 16 participants et la Corée du Sud 14. La représentation diminue ensuite rapidement.
+
+On voit très bien que les occasions pour un juge de juger un compatriote ne sont pas les mêmes selon le pays.
+
+# Écart de notation selon le programme
+
+```{r biais-pays}
+#biais par pays
+
+biais_par_pays <- aggregate(
+  score ~ judge_nation + same_country,
+  data = df_summary,
+  FUN = mean
+)
+```
+
+Une dernière analyse descriptive vérifie si l'écart « même pays - pays différent » existe seulement pour certains programmes ou est plutôt une règle générale.
+
+```{r ecart-programme-calcul}
+#écart de notation selon la discipline
+
+moyennes_programme <- aggregate(
+  score ~ program + same_country,
+  data = df_summary,
+  FUN = mean
+)
+
+moyennes_programme
+
+meme <- subset(moyennes_programme, same_country == TRUE)
+autre <- subset(moyennes_programme, same_country == FALSE)
+
+comparaison_programme <- merge(
+  meme,
+  autre,
+  by = "program",
+  suffixes = c("_meme", "_autre")
+)
+
+comparaison_programme$ecart <-
+  comparaison_programme$score_meme -
+  comparaison_programme$score_autre
+
+comparaison_programme <- comparaison_programme[
+  order(-comparaison_programme$ecart),
+]
+
+comparaison_programme
+```
+
+L'écart est positif dans **les huit programmes étudiés**. La différence générale observée n'est donc pas unique à un programme particulier.
+
+```{r graphique-programmes, fig.width=9, fig.height=7}
+par(mar = c(12, 5, 4, 2))
+
+barplot(
+  comparaison_programme$ecart,
+  names.arg = comparaison_programme$program,
+  main = "Écart de notation selon le programme",
+  ylab = "Score moyen (même pays - pays différent)",
+  las = 2,
+  cex.names = 0.8
+)
+
+mtext(
+  "Programme",
+  side = 1,
+  line = 10
+)
+```
+
+Le graphique présente directement cet écart pour chaque programme. L'axe vertical correspond à la différence « score moyen même pays - score moyen pays différent ». Une barre au-dessus de zéro indique donc un score moyen plus élevé lorsque le juge et le patineur représentent le même pays.
+
+Toutes les barres sont positives. L'écart varie selon le programme, mais la tendance est la même. 
+
+Cette comparaison reste descriptive. Elle montre la direction et l'ampleur des écarts, mais elle ne constitue pas huit tests distincts démontrant que chaque différence est statistiquement significative. Ces tests seraient intéressants mais assez lourds pour ce rapport.
+
+# Discussion
+
+Les principales analyses utilisées montrent vers la même tendance. La comparaison descriptive montre d'abord que les scores sont plus élevés lorsque le juge et le patineur représentent le même pays. Le test t de Welch indique ensuite que cette différence globale est statistiquement significative. Enfin, le modèle linéaire montre que l'association demeure significative après avoir pris en considération la nationalité du juge et celle du patineur.
+
+Le modèle linéaire est particulièrement utile pour l'interprétation. L'écart brut est d'environ 4,97 points, alors que l'effet estimé de `same_country` dans le modèle est d'environ 3,06 points. Cette diminution montre qu'une partie de la différence brute peut être associée à la composition des pays présents dans les données. Malgré cela, un effet positif lié au même pays demeure.
+
+Les analyses complémentaires montrent que le phénomène n'est pas parfaitement uniforme : l'écart varie selon la nationalité du juge. Il reste cependant positif lorsqu'on examine séparément chacun des huit programmes. La carte et le tableau montrent également que les pays sont représentés de manière très inégale dans l'ensemble des compétitions.
+
+# Limites
+
+La principale limite concerne la nationalité des juges. Cette information n'était pas incluse dans les fichiers originaux et a dû être ajoutée manuellement. L'analyse du biais porte donc sur trois compétitions seulement, même si la base originale en contient 17. Les résultats indiquent une tendance dans l'échantillon étudié, mais ne permettent pas d'affirmer que le même effet existe avec la même ampleur dans toutes les compétitions internationales.
+
+Le modèle contrôle la nationalité du juge et du patineur, mais il ne tient pas nécessairement compte de tous les facteurs susceptibles d'influencer les scores, comme le niveau individuel du patineur, la difficulté précise du programme, la compétition ou d'autres caractéristiques de la performance.
+
+Enfin, les analyses par nationalité de juge et par programme sont descriptives. Elles permettent d'identifier des tendances, mais les différences entre toutes les sous-catégories n'ont pas fait l'objet de tests statistiques.
+
+# Conclusion
+
+L'objectif principal était de déterminer si les juges de patinage artistique évaluent plus favorablement les patineurs de leur propre pays. Les résultats obtenus soutiennent cette hypothèse dans les données étudiées.
+
+Le score moyen est plus élevé lorsque le juge et le patineur représentent le même pays. Cette différence est statistiquement significative selon le test t de Welch. Elle demeure également significative dans le modèle linéaire après la prise en compte de la nationalité du juge et du patineur.
+
+Les analyses complémentaires, qui sont descriptives, ont permis d'avoir une idée de l'effet lorsqu'on sépare les données par programme ou par nationalité. Elles démontrent aussi l'inégalité de la répartition des patineurs dans les différents pays.
+
+En raison des limites de l'échantillon et des autres facteurs pouvant influencer les scores, ce résultat doit toutefois être interprété comme une indication de favoritisme national plutôt que comme une preuve définitive de causalité.
