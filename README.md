@@ -37,4 +37,4 @@ La nationalité des juges a été trouvée sur le site https://figure-skating.fa
 
 Le rapport HTML présente l'ensemble de la démarche, des analyses, des visualisations, des résultats et de leur interprétation. Il a été créé à partir du fichier R Markdown. Il peut être téléchargé ici, ou visualisé avec le lien ici-bas.
 
-**[Consulter le rapport final](LIEN_GITHUB_PAGES_ICI)**
+**[Consulter le rapport final](https://rickylicha.github.io/projet-final-SCI1402/)**
